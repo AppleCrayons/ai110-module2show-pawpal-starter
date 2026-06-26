@@ -4,6 +4,18 @@
 
 **a. Initial design**
 
+Owner
+Attributes - Name, preference
+Methods - Get pet, add pet, remove pet
+
+Pet
+Attributes - Name, age, species, preferences
+Methods - List, add, remove, task order
+
+Tasks
+Attributes - Title, duration, frequency, species assigned
+Methods - List, add, remove, total
+
 - Briefly describe your initial UML design.
 - What classes did you include, and what responsibilities did you assign to each?
 
