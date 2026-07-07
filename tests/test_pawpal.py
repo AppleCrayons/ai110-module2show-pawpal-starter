@@ -2,7 +2,16 @@
 
 from datetime import time
 
-from pawpal_system import DailyPlan, Owner, Pet, Priority, Scheduler, Task
+from pawpal_system import (
+    DailyPlan,
+    Owner,
+    Pet,
+    Priority,
+    Recurrence,
+    ScheduledItem,
+    Scheduler,
+    Task,
+)
 
 
 def test_task_fits_in():
@@ -162,3 +171,136 @@ def test_add_task_increases_pet_task_count():
     assert len(pet.list_tasks()) == 1
     pet.add_task(Task("Feed", 10, id="t2"))
     assert len(pet.list_tasks()) == 2
+
+
+# --- Sorting correctness ---------------------------------------------------
+
+
+def test_sort_by_time_returns_chronological_order():
+    """Tasks with preferred times come back earliest-first."""
+    noon = Task("Lunch feed", 10, id="t1", preferred_time="12:00")
+    morning = Task("Morning walk", 20, id="t2", preferred_time="08:00")
+    evening = Task("Dinner feed", 10, id="t3", preferred_time="18:30")
+
+    ordered = Scheduler().sort_by_time([noon, evening, morning])
+
+    assert [t.title for t in ordered] == ["Morning walk", "Lunch feed", "Dinner feed"]
+
+
+def test_sort_by_time_places_flexible_tasks_last_stably():
+    """Untimed (flexible) tasks sort to the end and keep their input order."""
+    timed = Task("Meds", 5, id="t1", preferred_time="09:00")
+    flex_a = Task("Play", 15, id="t2")           # no preferred_time
+    flex_b = Task("Brush", 10, id="t3")          # no preferred_time
+
+    ordered = Scheduler().sort_by_time([flex_a, flex_b, timed])
+
+    # Timed task first, then the two flexible tasks in their original order.
+    assert [t.title for t in ordered] == ["Meds", "Play", "Brush"]
+
+
+# --- Recurrence logic ------------------------------------------------------
+
+
+def test_daily_task_complete_creates_next_occurrence():
+    """Completing a daily task yields a fresh, open task for the next day."""
+    task = Task("Morning walk", 20, id="t1", recurrence=Recurrence.DAILY)
+
+    upcoming = task.mark_complete()
+
+    assert task.completed is True            # original is now done
+    assert upcoming is not None              # a follow-up was created
+    assert upcoming.completed is False       # follow-up is open
+    assert upcoming.title == task.title
+    assert upcoming.recurrence is Recurrence.DAILY
+    assert upcoming.id != task.id            # distinct id so both can coexist
+    assert task.recurrence.days == 1         # "next day"
+
+
+def test_pet_complete_task_appends_recurring_instance():
+    """Pet.complete_task auto-adds the next occurrence to the pet's list."""
+    pet = Pet(name="Mochi", species="dog", id="p1")
+    pet.add_task(Task("Feed", 10, id="t1", recurrence=Recurrence.DAILY))
+
+    upcoming = pet.complete_task("t1")
+
+    assert upcoming is not None
+    assert upcoming in pet.list_tasks()      # appended to the pet
+    assert upcoming.pet_id == "p1"           # back-reference stamped
+    # Exactly one open Feed remains (the new one); the original is completed.
+    open_feeds = [t for t in pet.list_tasks() if t.title == "Feed" and not t.completed]
+    assert len(open_feeds) == 1
+
+
+def test_one_off_task_complete_has_no_next_occurrence():
+    """A non-recurring task does not respawn when completed."""
+    task = Task("Vet visit", 45, id="t1", recurrence=Recurrence.NONE)
+    assert task.mark_complete() is None
+
+
+def test_repeated_completion_keeps_ids_unique():
+    """Completing the same recurring task repeatedly never reuses an id."""
+    pet = Pet(name="Mochi", species="dog", id="p1")
+    pet.add_task(Task("Walk", 20, id="t1", recurrence=Recurrence.DAILY))
+
+    seen = {"t1"}
+    current_id = "t1"
+    for _ in range(3):
+        upcoming = pet.complete_task(current_id)
+        assert upcoming.id not in seen
+        seen.add(upcoming.id)
+        current_id = upcoming.id
+
+
+# --- Conflict detection ----------------------------------------------------
+
+
+def test_scheduler_flags_duplicate_fixed_times():
+    """Two fixed-time tasks anchored at the same clock time are flagged."""
+    owner = Owner(name="Jordan", available_minutes=120)
+    pet = Pet(name="Mochi", species="dog", id="p1")
+    pet.add_task(
+        Task("Meds", 15, Priority.HIGH, id="t1",
+             preferred_time="08:00", fixed_time=True)
+    )
+    pet.add_task(
+        Task("Insulin", 15, Priority.HIGH, id="t2",
+             preferred_time="08:00", fixed_time=True)
+    )
+    owner.add_pet(pet)
+
+    plan = Scheduler().build_plan(owner)
+    conflicts = plan.conflicts()
+
+    assert len(conflicts) == 1                       # exactly one overlapping pair
+    assert plan.conflict_warning() != ""             # warning is surfaced
+
+
+def test_find_conflicts_ignores_touching_slots():
+    """A task ending exactly when the next starts is NOT a conflict."""
+    a = ScheduledItem(Task("A", 20, id="t1"), time(8, 0), time(8, 20))
+    b = ScheduledItem(Task("B", 20, id="t2"), time(8, 20), time(8, 40))
+    assert Scheduler().find_conflicts([a, b]) == []
+
+
+def test_conflict_warning_labels_cross_pet_overlap():
+    """Overlaps between different pets are detected and labeled."""
+    owner = Owner(name="Jordan", available_minutes=120)
+    dog = Pet(name="Mochi", species="dog", id="p1")
+    dog.add_task(
+        Task("Dog meds", 30, Priority.HIGH, id="t1",
+             preferred_time="08:00", fixed_time=True)
+    )
+    cat = Pet(name="Luna", species="cat", id="p2")
+    cat.add_task(
+        Task("Cat meds", 30, Priority.HIGH, id="t2",
+             preferred_time="08:15", fixed_time=True)
+    )
+    owner.add_pet(dog)
+    owner.add_pet(cat)
+
+    plan = Scheduler().build_plan(owner)
+    warning = plan.conflict_warning()
+
+    assert "different pets" in warning
+    assert len(plan.conflicts()) == 1
