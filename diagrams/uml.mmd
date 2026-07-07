@@ -1,4 +1,11 @@
 classDiagram
+    class Priority {
+        <<enumeration>>
+        LOW
+        MEDIUM
+        HIGH
+    }
+
     class Owner {
         +str name
         +list~Pet~ pets
@@ -19,7 +26,7 @@ classDiagram
         +int age
         +list~Task~ tasks
         +add_task(task: Task) None
-        +remove_task(title: str) None
+        +remove_task(task_id: str) None
         +list_tasks() list~Task~
         +total_task_time() int
         +tasks_by_priority() list~Task~
@@ -29,28 +36,36 @@ classDiagram
 
     class Task {
         +str id
+        +str pet_id
         +str title
         +int duration_minutes
-        +str priority
+        +Priority priority
         +str category
         +str preferred_time
+        +bool fixed_time
         +bool is_recurring
         +bool completed
-        +priority_rank() int
         +fits_in(minutes: int) bool
         +conflicts_with(other: Task) bool
         +urgency_score() float
         +summary() str
     }
 
+    class ScheduledItem {
+        +Task task
+        +time start
+        +time end
+    }
+
     class Scheduler {
-        +build_plan(pets: list~Pet~, available_minutes: int) DailyPlan
+        +build_plan(owner: Owner) DailyPlan
         -_sort_tasks(tasks: list~Task~) list~Task~
         -_filter_to_budget(tasks: list~Task~, minutes: int) list~Task~
+        -_place_in_slots(tasks: list~Task~) list~ScheduledItem~
     }
 
     class DailyPlan {
-        +list~Task~ scheduled
+        +list~ScheduledItem~ scheduled
         +list~Task~ skipped
         +explain() str
         +score_plan() float
@@ -59,7 +74,9 @@ classDiagram
 
     Owner "1" --> "*" Pet : owns
     Pet "1" --> "*" Task : has
-    Scheduler ..> Pet : reads
-    Scheduler ..> Task : orders
+    Task --> Priority : uses
+    Task ..> Pet : pet_id refers to
+    Scheduler ..> Owner : reads
     Scheduler --> DailyPlan : produces
-    DailyPlan "1" --> "*" Task : contains
+    ScheduledItem "1" --> "1" Task : wraps
+    DailyPlan "1" --> "*" ScheduledItem : contains

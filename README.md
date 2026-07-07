@@ -74,14 +74,68 @@ Sample test output:
 
 ## 📐 Smarter Scheduling
 
-> Fill in once you've implemented scheduling logic.
+Beyond the core `build_plan()` pass, PawPal+ implements four "smarter scheduling"
+features. Each is summarized below and documented in full in the method docstrings
+in [`pawpal_system.py`](pawpal_system.py).
 
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting | | e.g., by priority, duration |
-| Filtering | | e.g., skip tasks if time runs out |
-| Conflict handling | | e.g., overlapping time slots |
-| Recurring tasks | | e.g., daily vs. weekly |
+| Task sorting | `Scheduler.sort_by_time()` | Order tasks by clock time; flexible tasks last |
+| Filtering | `Owner.filter_tasks()` | Filter by completion status and/or pet name |
+| Conflict detection | `Scheduler.find_conflicts()`, `Scheduler.conflict_warning()`, `DailyPlan.conflict_warning()` | Overlapping time slots (same or different pets) |
+| Recurring tasks | `Task.mark_complete()`, `Task.next_occurrence()`, `Pet.complete_task()` | Daily/weekly tasks respawn on completion |
+
+### Sorting behavior — `Scheduler.sort_by_time()`
+
+Returns tasks ordered by their preferred clock time, earliest first. A `Task`'s
+time is its `preferred_time` string (`"HH:MM"`), parsed to minutes-since-midnight
+for comparison. Flexible tasks with no `preferred_time` are sorted to the end; the
+sort is stable, so they keep their original relative order. The input list is not
+mutated — a new list is returned.
+
+### Filtering behavior — `Owner.filter_tasks()`
+
+Returns the owner's tasks filtered by **completion status**, **pet name**, or both
+(keyword-only args, so calls read clearly):
+
+```python
+owner.filter_tasks(completed=False)      # only open tasks
+owner.filter_tasks(pet_name="Mochi")     # only that pet's tasks (case-insensitive)
+owner.filter_tasks(completed=True, pet_name="Biscuit")
+owner.filter_tasks()                      # every task across all pets
+```
+
+Pet-name filtering lives on `Owner` because a `Task` only stores `pet_id`; the
+owner is what resolves a name back to its pet and tasks. Each filter defaults to
+`None`, meaning "don't filter on this."
+
+### Conflict detection — `Scheduler.find_conflicts()` / `conflict_warning()`
+
+`find_conflicts(items)` compares every pair of scheduled items and returns those
+whose slots overlap, using **half-open intervals** (`a0 < b1 and b0 < a1`) so it
+catches partial overlaps — not just identical start times — and a task ending
+exactly when another begins is *not* a conflict. Because it works over the whole
+plan, it flags collisions whether the two tasks belong to the **same pet or
+different pets** (e.g. two `fixed_time` tasks anchored at the same clock time).
+
+`conflict_warning(items)` is the **lightweight** variant: it returns a
+human-readable, multi-line warning string (or `""` when the plan is clean) and
+**never raises**, so callers can print it and carry on. `DailyPlan.conflict_warning()`
+is a convenience wrapper that runs the check against the plan's own scheduled items.
+This is detection only — conflicts are reported, not auto-resolved.
+
+### Recurring task logic — `Task.mark_complete()` / `Pet.complete_task()`
+
+Recurrence is modeled by the `Recurrence` enum (`NONE` / `DAILY` / `WEEKLY`;
+`Recurrence.days` → `0`/`1`/`7`). When a recurring task is completed, a fresh
+instance is created automatically for the next occurrence:
+
+- `Task.next_occurrence()` — returns a fresh, uncompleted copy with a new unique id
+  (`t4` → `t4#2` → `t4#3`), or `None` for a one-off task.
+- `Task.mark_complete()` — marks the task done and returns its next occurrence
+  (or `None`).
+- `Pet.complete_task(task_id)` — marks the task done **and** appends the new
+  instance to the pet, so the respawn is automatic at the collection level.
 
 ## 📸 Demo Walkthrough
 

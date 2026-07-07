@@ -14,9 +14,10 @@ The original class skeleton is preserved in pawpal_system_skeleton.py.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import time
-from enum import IntEnum
+from enum import Enum, IntEnum
+from itertools import combinations
 
 
 DAY_START = time(8, 0)  # default clock time the planned day begins at
@@ -52,6 +53,29 @@ class Priority(IntEnum):
     HIGH = 3
 
 
+class Recurrence(str, Enum):
+    """How often a task repeats. str-based so it prints/serializes cleanly."""
+
+    NONE = "none"
+    DAILY = "daily"
+    WEEKLY = "weekly"
+
+    @property
+    def days(self) -> int:
+        """Days until the next occurrence (0 for a one-off task)."""
+        return {"none": 0, "daily": 1, "weekly": 7}[self.value]
+
+
+def _next_occurrence_id(task_id: str) -> str:
+    """Derive the id for a task's next occurrence, e.g. 't1' -> 't1#2'.
+
+    An existing '#N' suffix is incremented so repeated completions stay unique.
+    """
+    base, sep, num = task_id.partition("#")
+    n = int(num) + 1 if sep and num.isdigit() else 2
+    return f"{base}#{n}"
+
+
 @dataclass
 class Task:
     """A single pet care task (walk, feeding, meds, etc.)."""
@@ -64,8 +88,13 @@ class Task:
     category: str = "other"
     preferred_time: str = ""  # e.g. "08:00"; "" means flexible
     fixed_time: bool = False  # True = must run at preferred_time
-    is_recurring: bool = False
+    recurrence: Recurrence = Recurrence.NONE  # daily/weekly tasks respawn
     completed: bool = False
+
+    @property
+    def is_recurring(self) -> bool:
+        """True if this task repeats (daily or weekly)."""
+        return self.recurrence is not Recurrence.NONE
 
     def fits_in(self, minutes: int) -> bool:
         """Return True if this task fits within the remaining time budget."""
@@ -107,9 +136,30 @@ class Task:
         """One-line label, e.g. 'Morning walk (20 min) [HIGH]'."""
         return f"{self.title} ({self.duration_minutes} min) [{self.priority.name}]"
 
-    def mark_complete(self) -> None:
-        """Mark this task as done so it drops out of future plans."""
+    def next_occurrence(self) -> "Task | None":
+        """Return a fresh, uncompleted instance of this task for its next run.
+
+        Returns None for a one-off (non-recurring) task. The copy keeps the
+        same title/duration/time-of-day but gets a new id and is not completed.
+        (Times here are clock times only; `Recurrence.days` records how far out
+        the next run is for callers that track dates.)
+        """
+        if self.recurrence is Recurrence.NONE:
+            return None
+        return replace(
+            self,
+            id=_next_occurrence_id(self.id),
+            completed=False,
+        )
+
+    def mark_complete(self) -> "Task | None":
+        """Mark this task done; return its next occurrence if it recurs.
+
+        A daily/weekly task yields a fresh instance for the next run (which the
+        owning Pet appends via `complete_task`); a one-off returns None.
+        """
         self.completed = True
+        return self.next_occurrence()
 
 
 @dataclass
@@ -139,6 +189,20 @@ class Pet:
     def remove_task(self, task_id: str) -> None:
         """Remove a task by id."""
         self.tasks = [t for t in self.tasks if t.id != task_id]
+
+    def complete_task(self, task_id: str) -> "Task | None":
+        """Mark a task complete and auto-add its next occurrence if it recurs.
+
+        Returns the newly created next-occurrence Task (already appended to this
+        pet), or None for a one-off task. Raises KeyError if no task matches.
+        """
+        for task in self.tasks:
+            if task.id == task_id:
+                upcoming = task.mark_complete()
+                if upcoming is not None:
+                    self.add_task(upcoming)
+                return upcoming
+        raise KeyError(f"No task with id {task_id!r}")
 
     def list_tasks(self) -> list[Task]:
         """Return all tasks for this pet."""
@@ -198,6 +262,32 @@ class Owner:
         """Return all pets owned."""
         return list(self.pets)
 
+    def filter_tasks(
+        self,
+        *,
+        completed: bool | None = None,
+        pet_name: str | None = None,
+    ) -> list[Task]:
+        """Return this owner's tasks filtered by completion status and/or pet.
+
+        - `completed`: keep only tasks whose `completed` flag matches (True or
+          False). Left as None means "don't filter on completion".
+        - `pet_name`: keep only tasks belonging to the pet with this name
+          (case-insensitive). None means "any pet".
+
+        With no arguments, returns every task across all pets.
+        """
+        wanted = pet_name.casefold() if pet_name is not None else None
+        result: list[Task] = []
+        for pet in self.pets:
+            if wanted is not None and pet.name.casefold() != wanted:
+                continue
+            for task in pet.tasks:
+                if completed is not None and task.completed != completed:
+                    continue
+                result.append(task)
+        return result
+
     def busiest_pet(self) -> Pet:
         """Return the pet that consumes the most care time."""
         if not self.pets:
@@ -239,6 +329,18 @@ class DailyPlan:
             for task in self.skipped:
                 lines.append(f"  - {task.summary()}")
         return "\n".join(lines)
+
+    def conflicts(self) -> list[tuple[ScheduledItem, ScheduledItem]]:
+        """Overlapping pairs in this plan (see Scheduler.find_conflicts)."""
+        if self.scheduler is None:
+            raise ValueError("Plan has no scheduler to check conflicts with")
+        return self.scheduler.find_conflicts(self.scheduled)
+
+    def conflict_warning(self) -> str:
+        """Lightweight warning string for this plan's conflicts ('' if none)."""
+        if self.scheduler is None:
+            return ""
+        return self.scheduler.conflict_warning(self.scheduled)
 
     def score_plan(self) -> float:
         """Rate plan quality: fraction of total urgency actually scheduled.
@@ -292,6 +394,58 @@ class Scheduler:
             skipped=skipped,
             owner=owner,
             scheduler=self,
+        )
+
+    def find_conflicts(
+        self, items: list[ScheduledItem]
+    ) -> list[tuple[ScheduledItem, ScheduledItem]]:
+        """Return every pair of scheduled items whose time slots overlap.
+
+        Works across the whole plan, so it catches collisions whether the two
+        tasks belong to the same pet or to different pets (e.g. two fixed-time
+        tasks anchored at the same clock time). Uses half-open intervals: a task
+        ending exactly when another starts is not a conflict.
+        """
+        conflicts: list[tuple[ScheduledItem, ScheduledItem]] = []
+        ordered = sorted(items, key=lambda i: i.start)
+        for a, b in combinations(ordered, 2):
+            a0, a1 = _to_minutes(a.start), _to_minutes(a.end)
+            b0, b1 = _to_minutes(b.start), _to_minutes(b.end)
+            if a0 < b1 and b0 < a1:  # half-open intervals overlap
+                conflicts.append((a, b))
+        return conflicts
+
+    def conflict_warning(self, items: list[ScheduledItem]) -> str:
+        """Lightweight conflict check: return a warning message, never raise.
+
+        Returns an empty string when the plan is clean, or a human-readable,
+        multi-line warning listing each overlapping pair. Callers can print it
+        as-is and carry on -- nothing here crashes the program.
+        """
+        conflicts = self.find_conflicts(items)
+        if not conflicts:
+            return ""
+        lines = [f"WARNING: {len(conflicts)} scheduling conflict(s) detected:"]
+        for a, b in conflicts:
+            same_pet = a.task.pet_id == b.task.pet_id and a.task.pet_id
+            scope = "same pet" if same_pet else "different pets"
+            lines.append(
+                f"  - {a.task.title} ({a.start:%H:%M}-{a.end:%H:%M}) overlaps "
+                f"{b.task.title} ({b.start:%H:%M}-{b.end:%H:%M}) [{scope}]"
+            )
+        return "\n".join(lines)
+
+    def sort_by_time(self, tasks: list[Task]) -> list[Task]:
+        """Return tasks ordered by their preferred clock time (earliest first).
+
+        A Task's time is its `preferred_time` ("HH:MM"); flexible tasks with no
+        preferred_time are sorted to the end, keeping their relative order.
+        """
+        return sorted(
+            tasks,
+            key=lambda t: _to_minutes(_parse_time(t.preferred_time))
+            if _parse_time(t.preferred_time) is not None
+            else 24 * 60,
         )
 
     def _sort_tasks(self, tasks: list[Task]) -> list[Task]:
