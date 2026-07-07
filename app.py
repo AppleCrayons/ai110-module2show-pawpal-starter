@@ -125,10 +125,31 @@ else:
         )
         st.success(f"Added '{task_title}' to {pet.name}.")
 
-# Show the current tasks per pet.
-for pet in owner.list_pets():
-    if pet.list_tasks():
-        st.write(f"**{pet.name}** — {pet.care_load()} min of care:")
+# --- Show current tasks: filtered (Owner.filter_tasks) + sorted chronologically
+# (Scheduler.sort_by_time) so the data reads like a real daily agenda. ---
+scheduler = Scheduler()
+
+if any(pet.list_tasks() for pet in owner.list_pets()):
+    st.markdown("#### Current tasks")
+    fcol1, fcol2 = st.columns(2)
+    with fcol1:
+        status_filter = st.selectbox(
+            "Show", ["All", "Open only", "Completed only"], index=0
+        )
+    with fcol2:
+        sort_by_time = st.checkbox("Sort by time of day", value=True)
+
+    completed_flag = {"All": None, "Open only": False, "Completed only": True}[
+        status_filter
+    ]
+
+    for pet in owner.list_pets():
+        tasks = owner.filter_tasks(completed=completed_flag, pet_name=pet.name)
+        if not tasks:
+            continue
+        if sort_by_time:
+            tasks = scheduler.sort_by_time(tasks)
+        st.write(f"**{pet.name}** — {pet.care_load()} min of open care:")
         st.table(
             [
                 {
@@ -136,10 +157,13 @@ for pet in owner.list_pets():
                     "min": t.duration_minutes,
                     "priority": t.priority.name,
                     "time": t.preferred_time or "flexible",
+                    "status": "done" if t.completed else "open",
                 }
-                for t in pet.list_tasks()
+                for t in tasks
             ]
         )
+else:
+    st.info("No tasks yet. Add one above.")
 
 st.divider()
 
@@ -148,7 +172,7 @@ st.subheader("Build Schedule")
 st.caption("Ranks tasks by urgency, drops what won't fit the time budget, and slots the rest.")
 
 if st.button("Generate schedule"):
-    plan = Scheduler().build_plan(owner)
+    plan = scheduler.build_plan(owner)
 
     if plan.scheduled:
         st.markdown("### Today's Schedule")
@@ -164,6 +188,13 @@ if st.button("Generate schedule"):
                 for item in plan.scheduled
             ]
         )
+
+        # Surface time-slot collisions via the Scheduler's conflict methods.
+        warning = plan.conflict_warning()
+        if warning:
+            st.warning(warning)
+        else:
+            st.success("No scheduling conflicts — every task has a clear slot. ✅")
     else:
         st.info("Nothing scheduled — add some tasks and time budget first.")
 

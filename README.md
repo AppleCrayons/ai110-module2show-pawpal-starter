@@ -56,7 +56,7 @@ Today's Schedule
   12:00  Feeding (Biscuit) [HIGH]
 ```
 
-## 🧪 Testing PawPal+
+## 🧪 Testing PawPal+ (at bottom)
 
 ```bash
 # Run the full test suite:
@@ -139,12 +139,85 @@ instance is created automatically for the next occurrence:
 
 ## 📸 Demo Walkthrough
 
-Describe your app in numbered steps so a reader can follow along without watching a video:
+Follow these numbered steps to see PawPal+ end to end. Each step names the UI feature you use and the action you take:
 
-1. <!-- Describe this step -->
-2. <!-- Describe this step -->
-3. <!-- Describe this step -->
-4. <!-- Describe this step -->
-5. <!-- Add more steps as needed -->
+1. **Set the time budget** — in the *Owner* section, enter your name and the **available minutes** for the day (e.g. `120`). This is the budget the scheduler plans against.
+2. **Add a pet** — in *Add a Pet*, enter a name, species, and age, then click **Add pet**. A green success banner confirms it; pets persist across reruns via session state.
+3. **Add tasks** — in *Add a Task*, pick a pet and set title, duration, priority, an optional preferred time (`HH:MM`), and the "must run at that exact time" (fixed-time) flag. Add a few — mix flexible and fixed-time tasks.
+4. **Filter and sort** — in *Current tasks*, use the **status filter** (All / Open only / Completed only, backed by `Owner.filter_tasks()`) and the **Sort by time of day** toggle (backed by `Scheduler.sort_by_time()`) to watch tasks reorder chronologically, with flexible tasks last.
+5. **Generate the schedule** — in *Build Schedule*, click **Generate schedule** to run `Scheduler.build_plan()` and view today's timed plan, any skipped tasks, plan-quality/time-deficit metrics, and an expandable "Why this plan?" explanation.
+6. **Watch the Scheduler behaviors** — the plan demonstrates: **urgency ranking + budget filtering** (tasks kept by `urgency_score()` until time runs out, the rest skipped), **sorting by time**, **conflict warnings** (`conflict_warning()` flags overlapping slots and labels them *same pet* / *different pets*; a clean plan shows a success banner), and **daily/weekly recurrence** (completing a recurring task spawns its next occurrence with a fresh id, `t4 → t4#2`).
 
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->
+
+**Sample CLI output** — running `python main.py` seeds two pets with deliberately out-of-order and clashing tasks, then exercises scheduling, sorting, filtering, conflict detection, and recurrence:
+
+```
+Today's Schedule
+========================================
+  08:00  Litter change (Biscuit) [MEDIUM]
+  08:10  Enrichment play (Mochi) [LOW]
+  12:00  Feeding (Biscuit) [HIGH]
+  12:00  Nail trim (Biscuit) [MEDIUM]
+  18:30  Evening walk (Mochi) [HIGH]
+
+WARNING: 1 scheduling conflict(s) detected:
+  - Feeding (12:00-12:10) overlaps Nail trim (12:00-12:15) [same pet]
+
+Tasks as added (unsorted):
+  18:30  Evening walk
+  --:--  Enrichment play
+  08:00  Morning meds
+  --:--  Litter change
+  12:00  Feeding
+  12:00  Nail trim
+
+Sorted by time (Scheduler.sort_by_time):
+  08:00  Morning meds
+  12:00  Feeding
+  12:00  Nail trim
+  18:30  Evening walk
+  --:--  Enrichment play
+  --:--  Litter change
+
+Open tasks only (filter_tasks completed=False):
+  - Evening walk
+  - Enrichment play
+  - Litter change
+  - Feeding
+  - Nail trim
+
+Mochi's tasks (filter_tasks pet_name='Mochi'):
+  - Evening walk (open)
+  - Enrichment play (open)
+  - Morning meds (done)
+
+Biscuit's tasks before completing 'Feeding' (weekly):
+  - t5: Litter change (none, open)
+  - t4: Feeding (weekly, open)
+  - t6: Nail trim (none, open)
+
+Completed 't4'. Auto-created next occurrence: t4#2
+Biscuit's tasks after completing 'Feeding':
+  - t5: Litter change (none, open)
+  - t4: Feeding (weekly, done)
+  - t6: Nail trim (none, open)
+  - t4#2: Feeding (weekly, open)
+```
+
+## Testing PawPal+
+"python -m pytest" will run the program
+Tests cover tasks, how tasks will fit into the schedule, urgency ranking, summaries, pets and owners with adding tasks, inputting pet id's, and care loads. Scheduler is tested to test a list being properly formatted withn o overlap and ordered by urgency. Tests srting for chronological order of timed tasks, recurrence of tasks, and general conflict detection.
+
+PS C:\Users\bonca\110 ai\ai110-module2show-pawpal-starter> python -m pytest
+============================================================ test session starts =============================================================
+platform win32 -- Python 3.14.6, pytest-9.0.3, pluggy-1.6.0
+rootdir: C:\Users\bonca\110 ai\ai110-module2show-pawpal-starter
+plugins: anyio-4.13.0
+collected 26 items                                                                                                                            
+
+tests\test_pawpal.py ..........................                                                                                         [100%]
+
+============================================================= 26 passed in 0.06s =============================================================
+
+All 26 tests passed first time, 5* confidence.

@@ -1,0 +1,109 @@
+classDiagram
+    class Priority {
+        <<enumeration>>
+        LOW
+        MEDIUM
+        HIGH
+    }
+
+    class Recurrence {
+        <<enumeration>>
+        NONE
+        DAILY
+        WEEKLY
+        +int days
+    }
+
+    class Owner {
+        +str name
+        +list~Pet~ pets
+        +dict preferences
+        +int available_minutes
+        +add_pet(pet: Pet) None
+        +remove_pet(pet_id: str) None
+        +get_pet(pet_id: str) Pet
+        +list_pets() list~Pet~
+        +filter_tasks(completed: bool, pet_name: str) list~Task~
+        +busiest_pet() Pet
+        +time_deficit() int
+    }
+
+    class Pet {
+        +str id
+        +str name
+        +str species
+        +int age
+        +list~Task~ tasks
+        +add_task(task: Task) None
+        +remove_task(task_id: str) None
+        +complete_task(task_id: str) Task
+        +list_tasks() list~Task~
+        +total_task_time() int
+        +tasks_by_priority() list~Task~
+        +care_load() int
+        +needs_attention(available_minutes: int) bool
+    }
+
+    class Task {
+        +str id
+        +str pet_id
+        +str title
+        +int duration_minutes
+        +Priority priority
+        +str category
+        +str preferred_time
+        +bool fixed_time
+        +Recurrence recurrence
+        +bool is_recurring
+        +bool completed
+        +fits_in(minutes: int) bool
+        +conflicts_with(other: Task) bool
+        +urgency_score() float
+        +summary() str
+        +next_occurrence() Task
+        +mark_complete() Task
+    }
+
+    class ScheduledItem {
+        +Task task
+        +time start
+        +time end
+    }
+
+    class Scheduler {
+        +time day_start
+        +build_plan(owner: Owner) DailyPlan
+        +sort_by_time(tasks: list~Task~) list~Task~
+        +find_conflicts(items: list~ScheduledItem~) list~tuple~
+        +conflict_warning(items: list~ScheduledItem~) str
+        -_sort_tasks(tasks: list~Task~) list~Task~
+        -_filter_to_budget(tasks: list~Task~, minutes: int) list~Task~
+        -_place_in_slots(tasks: list~Task~) list~ScheduledItem~
+        -_earliest_free_slot(duration: int, occupied: list) int
+    }
+
+    class DailyPlan {
+        +list~ScheduledItem~ scheduled
+        +list~Task~ skipped
+        +Owner owner
+        +Scheduler scheduler
+        +explain() str
+        +conflicts() list~tuple~
+        +conflict_warning() str
+        +score_plan() float
+        +what_if(extra_minutes: int) DailyPlan
+    }
+
+    Owner "1" --> "*" Pet : owns
+    Pet "1" --> "*" Task : has
+    Task --> Priority : uses
+    Task --> Recurrence : uses
+    Task ..> Task : next_occurrence spawns
+    Task ..> Pet : pet_id refers to
+    Pet ..> Task : complete_task respawns recurring
+    Scheduler ..> Owner : reads
+    Scheduler --> DailyPlan : produces
+    ScheduledItem "1" --> "1" Task : wraps
+    DailyPlan "1" --> "*" ScheduledItem : contains
+    DailyPlan ..> Owner : re-plans via what_if
+    DailyPlan ..> Scheduler : delegates conflict checks
